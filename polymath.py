@@ -306,7 +306,7 @@ def get_pitch_dnn(audio_file):
     return pitch
 
 def stemsplit(destination, demucsmodel):
-    subprocess.run(["demucs", destination, "-n", demucsmodel]) #  '--mp3'
+    subprocess.run(["demucs", destination, "-n", demucsmodel, "-d", "cpu"]) #  '--mp3'
 
 def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False):
     print("Quantize Audio: Target BPM", bpm, 
