@@ -1,9 +1,9 @@
 
 # Polymath
 
-Polymath uses machine learning to convert any music library (*e.g from Hard-Drive or YouTube*) into a music production sample-library. The tool automatically separates songs into stems (*beats, bass, etc.*), quantizes them to the same tempo and beat-grid (*e.g. 120bpm*) and analyzes musical structure (*e.g. verse, chorus, etc.*), key (*e.g C4, E3, etc.*) and other infos (*timbre, loudness, etc.*). The result is a searchable sample library that streamlines the workflow for music producers, DJs, and ML audio developers.
+Polymath uses machine learning to convert any music library (*e.g from Hard-Drive or YouTube*) into a music production sample-library. The tool automatically separates songs into stems (*beats, bass, etc.*), quantizes them to the same tempo and beat-grid (*e.g. 120bpm*), analyzes musical structure (*e.g. verse, chorus, etc.*), key (*e.g C4, E3, etc.*) and other infos (*timbre, loudness, etc.*), and converts audio to midi. The result is a searchable sample library that streamlines the workflow for music producers, DJs, and ML audio developers.
 
-<p align="center"><img  width="95%"  src="https://samim.io/static/upload/Frame_15.png" /></p>
+<p align="center"><img alt="Polymath" src="https://samim.io/static/upload/illustration3.688a510b-bocuz8wh.png" /></p>
 
 ## Use-cases
 Polymath makes it effortless to combine elements from different songs to create unique new compositions: Simply grab a beat from a Funkadelic track, a bassline from a Tito Puente piece, and fitting horns from a Fela Kuti song, and seamlessly integrate them into your DAW in record time. Using Polymath's search capability to discover related tracks, it is a breeze to create a polished, hour-long mash-up DJ set. For ML developers, Polymath simplifies the process of creating a large music dataset, for training generative models, etc.
@@ -12,21 +12,59 @@ Polymath makes it effortless to combine elements from different songs to create 
 - Music Source Separation is performed with the [Demucs](https://github.com/facebookresearch/demucs) neural network
 - Music Structure Segmentation/Labeling is performed with the [sf_segmenter](https://github.com/wayne391/sf_segmenter) neural network
 - Music Pitch Tracking and Key Detection are performed with [Crepe](https://github.com/marl/crepe) neural network
+- Music to MIDI transcription is performed with [Basic Pitch](https://github.com/spotify/basic-pitch) neural network
 - Music Quantization and Alignment are performed with [pyrubberband](https://github.com/bmcfee/pyrubberband)
 - Music Info retrieval and processing is performed with [librosa](https://github.com/librosa/librosa)
 
+## Community
+
+Join the Polymath Community on [Discord](https://discord.gg/gaZMZKzScj)
+
+## Requirements
+
+You need to have the following software installed on your system:
+
+- ``ffmpeg``
+
 ## Installation
 
-You will need at least Python 3.7. From your terminal run:
+You need python version `>=3.7` and `<=3.10`. From your terminal run:
 ```bash
 git clone https://github.com/samim23/polymath
 cd polymath
 pip install -r requirements.txt
 ```
-If you are on MacOS, run these commands before installation:
+
+If you run into an issue with basic-pitch while trying to run Polymath, run this command after your installation:
 ```bash
-pip install tensorflow-macos
-pip install tensorflow-metal
+pip install git+https://github.com/spotify/basic-pitch.git
+```
+
+## Docker setup
+
+If you have [Docker](https://www.docker.com/) installed on your system, you can use the provided `Dockerfile` to quickly build a polymath docker image (if your user is not part of the `docker` group, remember to prepend `sudo` to the following command):
+
+```bash
+docker build -t polymath ./
+```
+
+In order to exchange input and output files between your hosts system and the polymath docker container, you need to create the following four directories:
+
+- `./input`
+- `./library`
+- `./processed`
+- `./separated`
+
+Now put any files you want to process with polymath into the `input` folder.
+Then you can run polymath through docker by using the `docker run` command and pass any arguments that you would originally pass to the python command, e.g. if you are in a linux OS call:
+
+```bash
+docker run \
+    -v "$(pwd)"/processed:/polymath/processed \
+    -v "$(pwd)"/separated:/polymath/separated \
+    -v "$(pwd)"/library:/polymath/library \
+    -v "$(pwd)"/input:/polymath/input \
+    polymath python /polymath/polymath.py -a ./input/song1.wav
 ```
 
 ## Run Polymath
@@ -78,6 +116,14 @@ python polymath.py -s n6DAqMFe97E -sa 10 -q all -t 120
 python polymath.py -s n6DAqMFe97E -sa 10 -q all -t 120 -st -k
 ```
 Similar songs are automatically found and optionally quantized and saved to the folder "/processed". This makes it easy to create for example an hour long mix of songs that perfectly match one after the other. 
+
+### 4. Convert Audio to MIDI
+##### Convert all processed audio files and stems to MIDI (-m)
+```bash
+python polymath.py -a n6DAqMFe97E -q all -t 120 -m
+```
+Generated Midi Files are currently always 120BPM and need to be time adjusted in your DAW. This will be resolved [soon](https://github.com/spotify/basic-pitch/issues/40). The current Audio2Midi model gives mixed results with drums/percussion. This will be resolved with additional audio2midi model options in the future.
+
 
 ## Audio Features
 

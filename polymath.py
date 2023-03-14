@@ -18,7 +18,10 @@ import soundfile as sf
 import pyrubberband as pyrb
 from yt_dlp import YoutubeDL
 from sf_segmenter.segmenter import Segmenter
-
+import tensorflow as tf
+from basic_pitch import ICASSP_2022_MODEL_PATH
+from basic_pitch.inference import predict_and_save
+from basic_pitch.inference import predict
 
 ##########################################
 ################ POLYMATH ################
@@ -38,6 +41,7 @@ class Video:
 ### Library
 
 LIBRARY_FILENAME = "library/database.p"
+basic_pitch_model = ""
 
 def write_library(videos):
     with open(LIBRARY_FILENAME, "wb") as lib:
@@ -57,7 +61,7 @@ def read_library():
 
 def audio_extract(vidobj,file):
     print("audio_extract",file)
-    command = f"ffmpeg -hide_banner -loglevel panic -i {file} -ab 160k -ac 2 -ar 44100 -vn -y {vidobj.audio}"
+    command = "ffmpeg -hide_banner -loglevel panic -i "+file+" -ab 160k -ac 2 -ar 44100 -vn -y " + vidobj.audio
     subprocess.call(command,shell=True)
     return vidobj.audio
 
@@ -148,18 +152,18 @@ def audio_process(vids, videos):
             # convert mp3 to wav and save it
             print('converting mp3 to wav:', vid)
             y, sr = librosa.load(path=vid, sr=None, mono=False)
-            path = f"{os.getcwd()}/library/{audioid}.wav"
+            path = os.path.join(os.getcwd(), 'library', audioid+'.wav')
             # resample to 44100k if required
             if sr != 44100:
                 print('converting audio file to 44100:', vid)
                 y = librosa.resample(y, orig_sr=sr, target_sr=44100)
-            sf.write(path, y, 44100)
+            sf.write(path, np.ravel(y), 44100)
             vid = path
 
         # check if is wav and copy it to local folder
         elif vid.endswith(".wav"):
             path1 = vid
-            path2 = f"{os.getcwd()}/library/{audioid}.wav"
+            path2 = os.path.join(os.getcwd(), 'library', audioid+'.wav')
             y, sr = librosa.load(path=vid, sr=None, mono=False)
             if sr != 44100:
                 print('converting audio file to 44100:', vid)
@@ -325,7 +329,22 @@ def get_pitch_dnn(audio_file):
 def stemsplit(destination, demucsmodel):
     subprocess.run(["demucs", destination, "-n", demucsmodel, "-d", "cpu"]) #  '--mp3'
 
-def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False):
+def extractMIDI(audio_paths, output_dir):
+    print('- Extract Midi')
+    save_midi = True
+    sonify_midi = False
+    save_model_outputs = False
+    save_notes = False
+
+    predict_and_save(audio_path_list=audio_paths, 
+                  output_directory=output_dir, 
+                  save_midi=save_midi, 
+                  sonify_midi=sonify_midi, 
+                  save_model_outputs=save_model_outputs, 
+                  save_notes=save_notes)
+
+
+def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False, extractMidi = False):
     print("Quantize Audio: Target BPM", bpm, 
         "-- id:",vid.id,
         "bpm:",round(vid.audio_features["tempo"],2),
@@ -368,12 +387,14 @@ def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False
     # construct time map
     time_map = []
     for i in range(len(beat_frames)):
-        if fixed_beat_frames[i] < len(y+1):
-            new_member = (beat_frames[i], fixed_beat_frames[i])
-            time_map.append(new_member)
+        new_member = (beat_frames[i], fixed_beat_frames[i])
+        time_map.append(new_member)
 
     # add ending to time map
-    new_member = (len(y+1), len(y+1))
+    original_length = len(y+1)
+    orig_end_diff = original_length - time_map[i][0]
+    new_ending = int(round(time_map[i][1] + orig_end_diff * (tempo / bpm)))
+    new_member = (original_length, new_ending)
     time_map.append(new_member)
 
     # time strech audio
@@ -388,22 +409,26 @@ def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False
         f"BPM {bpm}"
     )
     path_prefix = (
-        f"{os.getcwd()}/processed/{vid.id} - {vid.name}"
+        f"{vid.id} - {vid.name}"
     )
+
+    audiofilepaths = []
     # save audio to disk
-    path = f"{path_prefix} - {path_suffix}.wav"
+    path = os.path.join(os.getcwd(), 'processed', path_prefix + " - " + path_suffix +'.wav')
     sf.write(path, strechedaudio, sr)
+    audiofilepaths.append(path)
 
     # process stems
     stems = ['bass', 'drums', 'guitar', 'other', 'piano', 'vocals']
     for stem in stems:
-        path = f"{os.getcwd()}/separated/htdemucs_6s/{vid.id}/{stem}.wav"
+        path = os.path.join(os.getcwd(), 'separated', 'htdemucs_6s', vid.id, stem +'.wav')
         print(f"- Quantize Audio: {stem}")
         y, sr = librosa.load(path, sr=None)
         strechedaudio = pyrb.timemap_stretch(y, sr, time_map)
         # save stems to disk
-        path = f"{path_prefix} - Stem {stem} - {path_suffix}.wav"
+        path = os.path.join(os.getcwd(), 'processed', path_prefix + " - Stem " + stem + " - " + path_suffix +'.wav')
         sf.write(path, strechedaudio, sr)
+        audiofilepaths.append(path)
 
     # metronome click (optinal)
     click = False
@@ -411,10 +436,15 @@ def quantizeAudio(vid, bpm=120, keepOriginalBpm = False, pitchShiftFirst = False
         clicks_audio = librosa.clicks(times=fixed_beat_times, sr=sr)
         print(len(clicks_audio), len(strechedaudio))
         clicks_audio = clicks_audio[:len(strechedaudio)] 
-        sf.write(f"{os.getcwd()}/processed/{vid.id} - click.wav", clicks_audio, sr)
+        path = os.path.join(os.getcwd(), 'processed', vid.id + '- click.wav')
+        sf.write(path, clicks_audio, sr)
+
+    if extractMidi:
+        output_dir = os.path.join(os.getcwd(), 'processed')
+        extractMIDI(audiofilepaths, output_dir)
 
 
-def get_audio_features(file,file_id):
+def get_audio_features(file,file_id,extractMidi = False):
     print("------------------------------ get_audio_features:",file_id,"------------------------------")
     print('1/8 segementation')
     segments_boundaries,segments_labels = get_segments(file)
@@ -446,6 +476,15 @@ def get_audio_features(file,file_id):
 
     print('8/8 split stems')
     stemsplit(file, 'htdemucs_6s')
+
+    if extractMidi:
+        audiofilepaths = []
+        stems = ['bass', 'drums', 'guitar', 'other', 'piano', 'vocals']
+        for stem in stems:
+            path = os.path.join(os.getcwd(), 'separated', 'htdemucs_6s', file_id, stem +'.wav')
+            audiofilepaths.append(path)
+        output_dir = os.path.join(os.getcwd(), 'separated', 'htdemucs_6s', file_id)
+        extractMIDI(audiofilepaths, output_dir)
 
     audio_features = {
         "id":file_id,
@@ -538,7 +577,9 @@ def main():
     parser.add_argument('-k', '--quantizekeepbpm', help='quantize to the BPM of the original audio file"', required=False, action="store_true", default=False)
     parser.add_argument('-s', '--search', help='search for musically similar audio files, given a database id"', required=False)
     parser.add_argument('-sa', '--searchamount', help='amount of results the search returns"', required=False, type=int)
-    parser.add_argument('-st', '--searchbpm', help='Include BPM of audio files as similiarty search criteria"', required=False, action="store_true", default=False)
+    parser.add_argument('-st', '--searchbpm', help='include BPM of audio files as similiarty search criteria"', required=False, action="store_true", default=False)
+    parser.add_argument('-m', '--midi', help='extract midi from audio files"', required=False, action="store_true", default=False)
+
     args = parser.parse_args()
 
     # List of videos to use
@@ -583,6 +624,12 @@ def main():
         if vidargs[0] == 'all' and len(newvids) != 0:
             vidargs = newvids
 
+    # MIDI
+    extractmidi = bool(args.midi)
+    if extractmidi:
+        global basic_pitch_model
+        basic_pitch_model = tf.saved_model.load(str(ICASSP_2022_MODEL_PATH))
+
     # Tempo
     tempo = int(args.tempo or 120)
 
@@ -612,13 +659,13 @@ def main():
                 file = vid.url
                 # if is mp3 file
                 if vid.url[-3:] == "mp3":
-                    file = f"{os.getcwd()}/library/{vid.id}.wav"
+                    file = os.path.join(os.getcwd(), 'library', vid.id + '.wav')
             # Is audio file extracted from downloaded video
             else:
-                file = f"{os.getcwd()}/library/{vid.id}.wav"
+                file = os.path.join(os.getcwd(), 'library', vid.id + '.wav')
 
             # Audio feature extraction
-            audio_features = get_audio_features(file=file,file_id=vid.id)
+            audio_features = get_audio_features(file=file,file_id=vid.id, extractMidi=extractmidi)
 
             # Save to disk
             with open(feature_file, "wb") as f:
@@ -649,10 +696,10 @@ def main():
         for vidarg in vidargs:
             for idx, vid in enumerate(videos):
                 if vid.id == vidarg:
-                    quantizeAudio(videos[idx], bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst)
+                    quantizeAudio(videos[idx], bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst, extractMidi = extractmidi)
                     break
                 if vidarg == 'all' and len(newvids) == 0:
-                    quantizeAudio(videos[idx], bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst)
+                    quantizeAudio(videos[idx], bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst, extractMidi = extractmidi)
 
     # Search
     searchamount = int(args.searchamount or 20)
@@ -669,7 +716,7 @@ def main():
                     ' - ', query.name,
                 )
                 if args.quantize is not None:
-                    quantizeAudio(query, bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst)
+                    quantizeAudio(query, bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst, extractMidi = extractmidi)
                 i = 0
                 while i < searchamount:
                     nearest = get_nearest(query, videos, tempo, searchforbpm)
@@ -681,7 +728,7 @@ def main():
                         ' - ', query.name,
                     )
                     if args.quantize is not None:
-                        quantizeAudio(query, bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst)
+                        quantizeAudio(query, bpm=tempo, keepOriginalBpm = keepOriginalBpm, pitchShiftFirst = pitchShiftFirst, extractMidi = extractmidi)
                     i += 1
                 break
 
